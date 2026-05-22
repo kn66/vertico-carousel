@@ -10,6 +10,10 @@ to the beginning.
 As in ~icomplete-vertical-mode~, moving to the next candidate rotates the
 entire list while the selected candidate stays in the same position.
 
+* GIF
+
+[[file:gif/output.gif]]
+
 * Usage
 
 Emacs 29.1 or later and Vertico 2.8 or later are required.
