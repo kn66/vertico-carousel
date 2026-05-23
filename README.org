@@ -52,6 +52,11 @@ you do not need group headings, disable them as follows.
   shown more than once.
 - When used with ~vertico-indexed-mode~, wrapped candidates can also be
   selected by their displayed candidate numbers.
+- ~vertico-mouse~ and ~vertico-quick~ select the candidate shown on the
+  corresponding carousel row.
+- If another Vertico display mode such as ~vertico-flat-mode~,
+  ~vertico-grid-mode~, or ~vertico-unobtrusive-mode~ is active, that display
+  mode takes precedence over carousel display for the session.
 
 * Testing
 

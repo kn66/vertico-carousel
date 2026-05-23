@@ -12,7 +12,10 @@
 (require 'cl-lib)
 (setq load-prefer-newer t)
 (require 'vertico-carousel)
+(require 'vertico-grid)
 (require 'vertico-indexed)
+(require 'vertico-mouse)
+(require 'vertico-quick)
 
 (defmacro vertico-carousel-test--with-state (candidates index count &rest body)
   "Run BODY with Vertico CANDIDATES, selected INDEX and visible COUNT."
@@ -41,6 +44,19 @@
    ((eq face value) t)
    ((listp value) (memq face value))
    (t nil)))
+
+(defun vertico-carousel-test--quick-format ()
+  "Return formatted lines and quick events for the current carousel state."
+  (let (events lines)
+    (cl-letf* ((orig (symbol-function #'vertico--format-candidate))
+               ((symbol-function #'vertico--format-candidate)
+                (lambda (cand prefix suffix index start)
+                  (pcase-let ((`(,keys . ,evs)
+                               (vertico-quick--keys nil index start)))
+                    (setq events (nconc evs events))
+                    (funcall orig cand keys suffix index start)))))
+      (setq lines (vertico--arrange-candidates)))
+    (list lines events)))
 
 (ert-deftest vertico-carousel-visible-indices-start-at-selection ()
   (vertico-carousel-test--with-state '("a" "b" "c" "d" "e") 2 3
@@ -160,6 +176,46 @@
                        '("0 alpha\n" "[b]\n" "1 beta\n")))
         (should (equal vertico-carousel--index-map '(0 1)))))))
 
+(ert-deftest vertico-carousel-arrange-indexed-mode-keeps-mouse-indices ()
+  (vertico-carousel-test--with-state '("a" "b" "c" "d") 3 3
+    (let ((vertico-indexed-mode t)
+          (vertico-mouse-mode t))
+      (let ((lines (vertico--arrange-candidates)))
+        (should (equal (vertico-carousel-test--plain-lines lines)
+                       '("0 d \n" "1 a \n" "2 b \n")))
+        (should (equal (mapcar (lambda (line)
+                                 (get-text-property
+                                  0 'vertico-mouse--index line))
+                               lines)
+                       '(3 0 1)))))))
+
+(ert-deftest vertico-carousel-arrange-quick-keys-use-visible-order ()
+  (vertico-carousel-test--with-state '("a" "b" "c" "d") 3 3
+    (pcase-let ((`(,lines ,events) (vertico-carousel-test--quick-format)))
+      (should (equal (vertico-carousel-test--plain-lines lines)
+                     '("a d\n" "s a\n" "d b\n")))
+      (should (= (cdr (assq ?a events)) 3))
+      (should (= (cdr (assq ?s events)) 0))
+      (should (= (cdr (assq ?d events)) 1)))))
+
+(ert-deftest vertico-carousel-arrange-indexed-quick-keys-compose ()
+  (vertico-carousel-test--with-state '("a" "b" "c" "d") 3 3
+    (let ((vertico-indexed-mode t))
+      (pcase-let ((`(,lines ,events) (vertico-carousel-test--quick-format)))
+        (should (equal (vertico-carousel-test--plain-lines lines)
+                       '("0 a d\n" "1 s a\n" "2 d b\n")))
+        (should (= (cdr (assq ?a events)) 3))
+        (should (= (cdr (assq ?s events)) 0))
+        (should (= (cdr (assq ?d events)) 1))))))
+
+(ert-deftest vertico-carousel-arrange-defers-to-grid-mode ()
+  (vertico-carousel-test--with-state '("a" "b" "c" "d" "e" "f") 4 3
+    (let ((vertico-grid-mode t)
+          (vertico-grid--columns 2))
+      (should (equal (vertico-carousel-test--plain-lines
+                      (vertico--arrange-candidates))
+                     '("a    |   d\n" "b    |   e\n" "c    |   f\n"))))))
+
 (ert-deftest vertico-carousel-prepare-indexed-mode-selects-wrapped-row ()
   (vertico-carousel-test--with-state '("a" "b" "c" "d") 3 3
     (let ((vertico-indexed-mode t)
@@ -169,6 +225,17 @@
       (cl-letf (((symbol-function #'vertico--update) #'ignore))
         (vertico--prepare))
       (should (= vertico--index 0))
+      (should-not prefix-arg))))
+
+(ert-deftest vertico-carousel-prepare-indexed-mode-selects-first-row ()
+  (vertico-carousel-test--with-state '("a" "b" "c" "d") 3 3
+    (let ((vertico-indexed-mode t)
+          (this-command 'vertico-exit)
+          (prefix-arg 0))
+      (vertico--arrange-candidates)
+      (cl-letf (((symbol-function #'vertico--update) #'ignore))
+        (vertico--prepare))
+      (should (= vertico--index 3))
       (should-not prefix-arg))))
 
 (ert-deftest vertico-carousel-setup-enables-local-cycle ()
@@ -183,6 +250,15 @@
   (with-temp-buffer
     (let ((vertico-carousel-mode t)
           (vertico-carousel-cycle nil)
+          (vertico-cycle nil))
+      (vertico--setup)
+      (should-not vertico-cycle))))
+
+(ert-deftest vertico-carousel-setup-defers-cycle-for-grid-mode ()
+  (with-temp-buffer
+    (let ((vertico-carousel-mode t)
+          (vertico-grid-mode t)
+          (vertico-carousel-cycle t)
           (vertico-cycle nil))
       (vertico--setup)
       (should-not vertico-cycle))))

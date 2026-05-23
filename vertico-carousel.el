@@ -25,6 +25,8 @@
 (require 'vertico-indexed)
 (eval-when-compile (require 'cl-lib))
 
+(declare-function vertico-quick--keys "vertico-quick" (two index start))
+
 (defgroup vertico-carousel nil
   "Rotating top-selection display for Vertico."
   :link '(url-link "https://github.com/kn66/vertico-carousel")
@@ -47,6 +49,18 @@ candidate remains the first candidate row."
 
 (defvar-local vertico-carousel--index-map nil
   "Candidate indices in the current carousel display order.")
+
+(defvar vertico-carousel--display-index nil
+  "Candidate row currently being formatted in carousel display order.")
+
+(defvar vertico-carousel--candidate-prefix nil
+  "Prefix inserted by `vertico-carousel' before formatting a candidate.")
+
+(defun vertico-carousel--other-display-mode-p ()
+  "Return non-nil if another Vertico display mode should take precedence."
+  (or (bound-and-true-p vertico-flat-mode)
+      (bound-and-true-p vertico-grid-mode)
+      (bound-and-true-p vertico-unobtrusive-mode)))
 
 (defun vertico-carousel--start-index ()
   "Return the first candidate index to display."
@@ -71,6 +85,15 @@ the end of the list, the returned indices wrap to the beginning."
 (defun vertico-carousel--indexed-mode-p ()
   "Return non-nil if `vertico-indexed-mode' is active."
   (bound-and-true-p vertico-indexed-mode))
+
+(defun vertico-carousel--indexed-prefix (index)
+  "Return `vertico-indexed-mode' prefix for display INDEX."
+  (when (vertico-carousel--indexed-mode-p)
+    (propertize
+     (format (if (> (+ vertico-indexed-start vertico-count) 10)
+                 "%2d " "%1d ")
+             (+ index vertico-indexed-start))
+     'face 'vertico-indexed)))
 
 (defun vertico-carousel--maybe-group-title (title cand lines)
   "Return a formatted group TITLE for CAND when it fits before LINES.
@@ -111,10 +134,13 @@ candidate that follows it."
                        cand (funcall group-fun cand 'transform)))
                (when (string-search "\n" cand)
                  (setq cand (vertico--truncate-multiline cand max-width)))
-               (push (if (vertico-carousel--indexed-mode-p)
-                         (let ((vertico--index (if (>= vertico--index 0) 0 -1)))
-                           (vertico--format-candidate
-                            cand prefix suffix display-index 0))
+               (when (vertico-carousel--indexed-mode-p)
+                 (setq vertico-indexed--min 0
+                       vertico-indexed--max display-index))
+               (push (let ((vertico-carousel--display-index display-index)
+                           (vertico-carousel--candidate-prefix
+                            (vertico-carousel--indexed-prefix display-index))
+                           (vertico-indexed-mode nil))
                        (vertico--format-candidate
                         cand prefix suffix index start))
                      lines)
@@ -122,6 +148,13 @@ candidate that follows it."
                (setq first nil)))
     (setq vertico-carousel--index-map (nreverse displayed-indices))
     (nreverse lines)))
+
+(cl-defmethod vertico--format-candidate :around
+  (cand prefix suffix index start &context (vertico-carousel-mode (eql t)))
+  "Apply carousel candidate PREFIX around other Vertico format extensions."
+  (when vertico-carousel--candidate-prefix
+    (setq prefix (concat vertico-carousel--candidate-prefix prefix)))
+  (cl-call-next-method cand prefix suffix index start))
 
 ;;;###autoload
 (define-minor-mode vertico-carousel-mode
@@ -134,7 +167,8 @@ candidate list."
 
 (cl-defmethod vertico--setup :after (&context (vertico-carousel-mode (eql t)))
   "Enable carousel session defaults for VERTICO-CAROUSEL-MODE."
-  (when vertico-carousel-cycle
+  (when (and vertico-carousel-cycle
+             (not (vertico-carousel--other-display-mode-p)))
     (setq-local vertico-cycle t)))
 
 (cl-defmethod vertico--arrange-candidates
@@ -158,6 +192,38 @@ The current selection appears at the first row."
         (minibuffer-message "Out of range")
         (setq this-command #'ignore
               prefix-arg nil)))))
+
+(defun vertico-carousel--quick-keys (orig two index start)
+  "Call ORIG with TWO, INDEX and START adjusted for carousel display.
+The quick key is computed from the visible carousel row, but the returned
+event keeps the original candidate INDEX."
+  (if (and vertico-carousel-mode
+           (integerp vertico-carousel--display-index))
+      (let ((res (funcall orig two vertico-carousel--display-index 0)))
+        (cons (car res)
+              (mapcar (pcase-lambda (`(,key . ,value))
+                        (cons key (if (integerp value) index value)))
+                      (cdr res))))
+    (funcall orig two index start)))
+
+(with-eval-after-load 'vertico-quick
+  (advice-add #'vertico-quick--keys :around #'vertico-carousel--quick-keys))
+
+(with-eval-after-load 'vertico-flat
+  (cl-defmethod vertico--arrange-candidates
+    (&context (vertico-carousel-mode (eql t))
+              (vertico-flat-mode (eql t)))
+    "Defer to `vertico-flat-mode' when it is enabled with carousel."
+    (let ((vertico-carousel-mode nil))
+      (vertico--arrange-candidates))))
+
+(with-eval-after-load 'vertico-grid
+  (cl-defmethod vertico--arrange-candidates
+    (&context (vertico-carousel-mode (eql t))
+              (vertico-grid-mode (eql t)))
+    "Defer to `vertico-grid-mode' when it is enabled with carousel."
+    (let ((vertico-carousel-mode nil))
+      (vertico--arrange-candidates))))
 
 (provide 'vertico-carousel)
 ;;; vertico-carousel.el ends here
